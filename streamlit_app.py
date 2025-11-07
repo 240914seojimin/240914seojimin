@@ -303,13 +303,17 @@ canvas.addEventListener('touchstart', ()=> { jump(); });
 // 제출 버튼 동작: top 으로 쿼리 파라미터를 붙여 제출
 document.getElementById('submitBtn').addEventListener('click', function(){
   const final = document.getElementById('finalScore').innerText || '0';
-  // top 레벨 경로에 submit_score 파라미터를 붙여 리로드 (서버 측에서 처리)
+  const qs = '?submit_score=' + encodeURIComponent(final);
   try {
-    const target = window.top.location.pathname + '?submit_score=' + encodeURIComponent(final);
-    window.top.location.href = target;
+    // 부모 창의 origin+pathname으로 안전하게 URL 구성 (cross-origin 접근 시 예외 발생할 수 있음)
+    const topLoc = window.top.location;
+    const baseOrigin = topLoc.origin ? topLoc.origin : window.location.origin;
+    const basePath = topLoc.pathname ? topLoc.pathname : window.location.pathname;
+    window.top.location.href = baseOrigin + basePath + qs;
   } catch (e) {
-    // 안전하게 대체: 현재 윈도우로 이동
-    window.location.href = window.location.pathname + '?submit_score=' + encodeURIComponent(final);
+    // 부모 창에 접근 불가하면 현재 창의 origin+pathname으로 대체
+    const base = window.location.origin + window.location.pathname;
+    window.location.href = base + qs;
   }
 });
 
