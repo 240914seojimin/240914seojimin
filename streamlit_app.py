@@ -1,12 +1,56 @@
+import json
+import os
 import streamlit as st
+import streamlit.components.v1 as components
 
 st.title("🎈 My new app")
 st.write(
     "Let's start building! For help and inspiration, head over to [docs.streamlit.io](https://docs.streamlit.io/)."
 )
 
-# 간단한 러너 + 허들 게임 (스페이스바로 점프)
-import streamlit.components.v1 as components
+# 저장할 파일 경로 (작업공간 내)
+HIGHSCORE_FILE = "/workspaces/240914seojimin/highscore.json"
+
+# 쿼리 파라미터로 제출된 점수 처리
+params = st.experimental_get_query_params()
+if "submit_score" in params:
+    try:
+        submitted = int(params["submit_score"][0])
+    except Exception:
+        submitted = 0
+    # 기존 최고점 불러오기
+    if os.path.exists(HIGHSCORE_FILE):
+        try:
+            with open(HIGHSCORE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                best = int(data.get("score", 0))
+        except Exception:
+            best = 0
+    else:
+        best = 0
+
+    if submitted > best:
+        best = submitted
+        with open(HIGHSCORE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"score": best}, f)
+        st.success(f"새 최고점수로 갱신되었습니다: {best}")
+    else:
+        st.info(f"제출된 점수: {submitted} — 현재 최고점수는 {best} 입니다.")
+    # 쿼리 제거 (재처리 방지)
+    st.experimental_set_query_params()
+
+# 현재 저장된 최고점 불러와서 표시
+if os.path.exists(HIGHSCORE_FILE):
+    try:
+        with open(HIGHSCORE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            global_best = int(data.get("score", 0))
+    except Exception:
+        global_best = 0
+else:
+    global_best = 0
+
+st.markdown(f"**전체 플레이어 최고점수:** {global_best}")
 
 GAME_HTML = r"""
 <!doctype html>
@@ -18,13 +62,30 @@ GAME_HTML = r"""
   #game { display:block; margin:12px auto; background:#87ceeb; border:4px solid #222; border-radius:8px; }
   .overlay { position: absolute; left:12px; top:12px; color:#111; font-weight:600; }
   .hint { position: absolute; right:12px; top:12px; color:#111; opacity:0.9; }
+  #submitArea {
+    position: absolute; left:50%; transform:translateX(-50%); top:60%;
+    display:none; background: rgba(255,255,255,0.95); padding:10px 14px;
+    border-radius:8px; box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    text-align:center;
+  }
+  #submitBtn {
+    background:#2b8aef; color:#fff; border:none; padding:8px 12px; border-radius:6px;
+    cursor:pointer; font-weight:600; margin-top:8px;
+  }
+  #submitBtn:hover { filter:brightness(0.95); }
 </style>
 </head>
 <body>
 <div style="position:relative; width:800px; margin:0 auto;">
   <canvas id="game" width="800" height="260"></canvas>
   <div class="overlay" id="score">점수: 0</div>
-  <div class="hint">스페이스바 또는 클릭으로 점프 — 충돌 시 R로 재시작</div>
+  <div class="hint">스페이스바 또는 클릭으로 점프 — 충돌 시 R로 재시작 (더블 점프 가능)</div>
+
+  <div id="submitArea">
+    <div>최종 점수: <strong id="finalScore">0</strong></div>
+    <button id="submitBtn">서버에 점수 제출</button>
+    <div style="font-size:12px; color:#444; margin-top:6px;">제출하면 전체 플레이어 최고점으로 비교됩니다.</div>
+  </div>
 </div>
 
 <script>
@@ -37,7 +98,8 @@ let score = 0;
 let speed = 3;
 let gravity = 0.8;
 
-const player = { x: 80, y: H - 40, w: 28, h: 36, vy:0, onGround:true };
+// player에 jumps 추가 (더블 점프 상태 추적)
+const player = { x: 80, y: H - 40, w: 28, h: 36, vy:0, onGround:true, jumps:0 };
 let obstacles = [];
 let spawnTimer = 0;
 let spawnInterval = 90; // frames
@@ -63,11 +125,6 @@ for(let i=0;i<4;i++){
   });
 }
 
-// 간단한 게임오버 표시 함수 (호출 안정성 확보)
-function showGameOver(){
-  // no-op; 렌더 루틴에서 처리됨
-}
-
 function resetGame(){
   running = true;
   score = 0;
@@ -75,11 +132,12 @@ function resetGame(){
   player.y = H - 40;
   player.vy = 0;
   player.onGround = true;
+  player.jumps = 0;
   obstacles = [];
   spawnTimer = 0;
   spawnInterval = 90;
   document.getElementById('score').innerText = '점수: 0';
-  // 리셋 시 구름/새 위치 약간 랜덤화
+  document.getElementById('submitArea').style.display = 'none';
   for(const c of clouds){ c.x = Math.random()*W; c.y = 20 + Math.random()*60; }
   for(const b of birds){ b.x = Math.random()*W; b.y = 40 + Math.random()*80; b.flap = Math.random()*Math.PI*2; }
   loop();
@@ -112,6 +170,7 @@ function update(){
     player.y = H - 8 - player.h;
     player.vy = 0;
     player.onGround = true;
+    player.jumps = 0; // 착지하면 점프 카운트 리셋
   } else {
     player.onGround = false;
   }
@@ -135,7 +194,10 @@ function update(){
        player.y < ob.y + ob.h &&
        player.y + player.h > ob.y){
          running = false;
-         showGameOver();
+         // 게임 오버 시 제출 영역 노출
+         const final = Math.floor(score/10);
+         document.getElementById('finalScore').innerText = final;
+         document.getElementById('submitArea').style.display = 'block';
     }
   }
 
@@ -160,7 +222,6 @@ function draw(){
     ctx.translate(c.x, c.y);
     ctx.scale(c.scale, c.scale);
     ctx.fillStyle = 'rgba(255,255,255,0.95)';
-    // 구름 간단 도형
     ctx.beginPath();
     ctx.arc(0, 0, 18, Math.PI*0.5, Math.PI*1.5);
     ctx.arc(22, -8, 22, Math.PI*1.0, Math.PI*1.85);
@@ -170,7 +231,7 @@ function draw(){
     ctx.restore();
   }
 
-  // 새 그리기 (V자 형태로 단순 표현, 날갯짓 효과)
+  // 새 그리기
   for(const b of birds){
     const wing = Math.sin(b.flap) * 6;
     ctx.strokeStyle = '#222';
@@ -202,7 +263,7 @@ function draw(){
   }
 
   if(!running){
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.fillRect(0,0,W,H);
     ctx.fillStyle = '#fff';
     ctx.font = '24px sans-serif';
@@ -220,10 +281,15 @@ function loop(){
   if(running) requestAnimationFrame(loop);
 }
 
+// 더블 점프 지원
 function jump(){
   if(player.onGround){
     player.vy = -12;
     player.onGround = false;
+    player.jumps = 1;
+  } else if(player.jumps < 2){
+    player.vy = -10;
+    player.jumps++;
   }
 }
 
@@ -234,13 +300,26 @@ document.addEventListener('keydown', (e)=>{
 canvas.addEventListener('mousedown', ()=> jump());
 canvas.addEventListener('touchstart', ()=> { jump(); });
 
+// 제출 버튼 동작: top 으로 쿼리 파라미터를 붙여 제출
+document.getElementById('submitBtn').addEventListener('click', function(){
+  const final = document.getElementById('finalScore').innerText || '0';
+  // top 레벨 경로에 submit_score 파라미터를 붙여 리로드 (서버 측에서 처리)
+  try {
+    const target = window.top.location.pathname + '?submit_score=' + encodeURIComponent(final);
+    window.top.location.href = target;
+  } catch (e) {
+    // 안전하게 대체: 현재 윈도우로 이동
+    window.location.href = window.location.pathname + '?submit_score=' + encodeURIComponent(final);
+  }
+});
+
 loop();
 </script>
 </body>
 </html>
 """
 
-components.html(GAME_HTML, height=320, scrolling=False)
+components.html(GAME_HTML, height=360, scrolling=False)
 
 # 게임 설명 추가
 st.header("🎮 게임 설명")
@@ -249,6 +328,6 @@ st.markdown("""
 - **조작:** 스페이스바 또는 캔버스 클릭/터치로 점프. 충돌 시 `R` 키로 재시작.
 - **점수:** 시간이 지날수록 증가하며 화면 왼쪽 상단에 표시됩니다(초 단위 환산).
 - **난이도:** 시간이 지남에 따라 장애물 속도가 빨라집니다.
-- **팁:** 착지한 후에만 다시 점프할 수 있으므로 타이밍을 잘 맞추세요.
+- **팁:** 착지한 후에만 다시 점프할 수 있으므로 타이밍을 잘 맞추세요. (더블 점프: 공중에서 한 번 더 점프 가능)
 - **모바일:** 터치로도 점프 가능합니다.
 """)
