@@ -22,7 +22,7 @@ GAME_HTML = r"""
 </head>
 <body>
 <div style="position:relative; width:800px; margin:0 auto;">
-  <canvas id="game" width="800" height="200"></canvas>
+  <canvas id="game" width="800" height="260"></canvas>
   <div class="overlay" id="score">점수: 0</div>
   <div class="hint">스페이스바 또는 클릭으로 점프 — 충돌 시 R로 재시작</div>
 </div>
@@ -42,6 +42,32 @@ let obstacles = [];
 let spawnTimer = 0;
 let spawnInterval = 90; // frames
 
+// 배경용 구름/새 객체
+const clouds = [];
+const birds = [];
+for(let i=0;i<6;i++){
+  clouds.push({
+    x: Math.random()*W,
+    y: 20 + Math.random()*60,
+    scale: 0.8 + Math.random()*1.2,
+    speed: 0.3 + Math.random()*0.6
+  });
+}
+for(let i=0;i<4;i++){
+  birds.push({
+    x: Math.random()*W,
+    y: 40 + Math.random()*80,
+    dir: Math.random() < 0.5 ? -1 : 1,
+    speed: 1 + Math.random()*1.5,
+    flap: Math.random()*Math.PI*2
+  });
+}
+
+// 간단한 게임오버 표시 함수 (호출 안정성 확보)
+function showGameOver(){
+  // no-op; 렌더 루틴에서 처리됨
+}
+
 function resetGame(){
   running = true;
   score = 0;
@@ -53,6 +79,9 @@ function resetGame(){
   spawnTimer = 0;
   spawnInterval = 90;
   document.getElementById('score').innerText = '점수: 0';
+  // 리셋 시 구름/새 위치 약간 랜덤화
+  for(const c of clouds){ c.x = Math.random()*W; c.y = 20 + Math.random()*60; }
+  for(const b of birds){ b.x = Math.random()*W; b.y = 40 + Math.random()*80; b.flap = Math.random()*Math.PI*2; }
   loop();
 }
 
@@ -63,6 +92,18 @@ function spawnObstacle(){
 
 function update(){
   if(!running) return;
+
+  // 배경 업데이트 (구름/새)
+  for(const c of clouds){
+    c.x -= c.speed * (speed/3);
+    if(c.x + 120*c.scale < 0) c.x = W + 20 + Math.random()*80;
+  }
+  for(const b of birds){
+    b.x -= b.speed * (speed/3) * b.dir;
+    b.flap += 0.25 + Math.random()*0.15;
+    if(b.dir < 0 && b.x < -30) { b.x = W + 30; b.y = 30 + Math.random()*100; }
+    if(b.dir > 0 && b.x > W + 30) { b.x = -30; b.y = 30 + Math.random()*100; }
+  }
 
   // player physics
   player.vy += gravity;
@@ -105,10 +146,41 @@ function update(){
 }
 
 function draw(){
-  // sky
-  ctx.clearRect(0,0,W,H);
-  ctx.fillStyle = '#87ceeb';
+  // sky gradient
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0, '#87cefa');
+  g.addColorStop(0.6, '#aee0ff');
+  g.addColorStop(1, '#87ceeb');
+  ctx.fillStyle = g;
   ctx.fillRect(0,0,W,H);
+
+  // 먼 배경 구름
+  for(const c of clouds){
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.scale(c.scale, c.scale);
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    // 구름 간단 도형
+    ctx.beginPath();
+    ctx.arc(0, 0, 18, Math.PI*0.5, Math.PI*1.5);
+    ctx.arc(22, -8, 22, Math.PI*1.0, Math.PI*1.85);
+    ctx.arc(44, 0, 18, Math.PI*1.5, Math.PI*0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 새 그리기 (V자 형태로 단순 표현, 날갯짓 효과)
+  for(const b of birds){
+    const wing = Math.sin(b.flap) * 6;
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(b.x, b.y);
+    ctx.lineTo(b.x + 8 * b.dir, b.y + wing);
+    ctx.lineTo(b.x + 16 * b.dir, b.y);
+    ctx.stroke();
+  }
 
   // ground
   ctx.fillStyle = '#5c3a21';
@@ -168,4 +240,15 @@ loop();
 </html>
 """
 
-components.html(GAME_HTML, height=260, scrolling=False)
+components.html(GAME_HTML, height=320, scrolling=False)
+
+# 게임 설명 추가
+st.header("🎮 게임 설명")
+st.markdown("""
+- **목표:** 허들을 점프해서 피하며 최대한 오래 달리기.
+- **조작:** 스페이스바 또는 캔버스 클릭/터치로 점프. 충돌 시 `R` 키로 재시작.
+- **점수:** 시간이 지날수록 증가하며 화면 왼쪽 상단에 표시됩니다(초 단위 환산).
+- **난이도:** 시간이 지남에 따라 장애물 속도가 빨라집니다.
+- **팁:** 착지한 후에만 다시 점프할 수 있으므로 타이밍을 잘 맞추세요.
+- **모바일:** 터치로도 점프 가능합니다.
+""")
